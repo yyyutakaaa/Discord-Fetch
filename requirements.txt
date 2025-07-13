@@ -1,0 +1,23 @@
+# Discord HTTP Chat Fetcher Requirements
+# HTTP client for async requests
+aiohttp>=3.8.0
+
+# Rich console output and UI
+rich>=13.0.0
+
+# Environment variables support
+python-dotenv>=1.0.0
+
+# Secure credential storage
+keyring>=24.0.0
+
+# For better datetime handling
+python-dateutil>=2.8.0
+
+# Built-in modules (no installation needed):
+# asyncio - built-in module
+# csv - built-in module
+# json - built-in module
+# pathlib - built-in module
+# os - built-in module
+# getpass - built-in module

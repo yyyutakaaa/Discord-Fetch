@@ -1,0 +1,9 @@
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+discord_fetcher_env/
+.env
+.DS_Store
+.vscode/
+.git copy

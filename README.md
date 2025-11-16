@@ -43,17 +43,7 @@ pip install -r requirements.txt
 
 **Important:** This tool requires your Discord USER token, not a bot token.
 
-### Method 1 (Recommended)
-
-1. Open Discord in your web browser (discord.com)
-2. Login to your account
-3. Press F12 to open Developer Tools
-4. Go to the Console tab
-5. Type: `localStorage.token`
-6. Press Enter
-7. Copy the value (without the quotes)
-
-### Method 2 (Alternative)
+### Method
 
 1. Open Discord in your web browser
 2. Press F12 to open Developer Tools

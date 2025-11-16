@@ -22,7 +22,7 @@ A Python tool to fetch and export Discord messages from DMs and server channels 
 ### 1. Clone or download this repository
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/yyyutakaaa/Discord-Fetch
 cd discord-chat-fetcher
 ```
 

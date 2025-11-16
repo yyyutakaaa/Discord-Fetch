@@ -218,29 +218,42 @@ class DiscordHTTPClient:
     
     async def get_messages(self, channel_id: str, limit: int = 100, before: str = None) -> List[Dict]:
         """Get messages from a channel."""
-        try:
-            params = {"limit": min(limit, 100)}  # Discord API limit is 100 per request
-            if before:
-                params["before"] = before
-            
-            url = f"{DISCORD_API_BASE}/channels/{channel_id}/messages"
-            
-            async with self.session.get(
-                url,
-                headers=self.headers,
-                params=params
-            ) as response:
-                if response.status == 200:
-                    return await response.json()
-                elif response.status == 403:
-                    console.print(f"[red]No permission to read messages in this channel[/red]")
-                    return []
-                else:
+        params = {"limit": min(limit, 100)}  # Discord API limit is 100 per request
+        if before:
+            params["before"] = before
+        
+        url = f"{DISCORD_API_BASE}/channels/{channel_id}/messages"
+        
+        retries = 3
+        while retries > 0:
+            try:
+                async with self.session.get(
+                    url,
+                    headers=self.headers,
+                    params=params
+                ) as response:
+                    if response.status == 200:
+                        return await response.json()
+                    if response.status == 403:
+                        console.print(f"[red]No permission to read messages in this channel[/red]")
+                        return []
+                    if response.status == 429:
+                        retry_after = float(response.headers.get("retry-after", "1"))
+                        console.print(f"[yellow]Rate limited, retrying in {retry_after} seconds...[/yellow]")
+                        await asyncio.sleep(retry_after)
+                        retries -= 1
+                        continue
+                    
                     console.print(f"[red]Failed to get messages: {response.status}[/red]")
                     return []
-        except Exception as e:
-            console.print(f"[red]Error getting messages: {str(e)}[/red]")
-            return []
+            except Exception as e:
+                retries -= 1
+                if retries <= 0:
+                    console.print(f"[red]Error getting messages: {str(e)}[/red]")
+                    return []
+                await asyncio.sleep(1)
+        
+        return []
     
     async def fetch_all_messages(self, channel_id: str, total_limit: int) -> List[Dict]:
         """Fetch multiple batches of messages."""
@@ -257,6 +270,8 @@ class DiscordHTTPClient:
                 messages = await self.get_messages(channel_id, batch_size, before)
                 
                 if not messages:
+                    console.print("[yellow]Stopped fetching messages early (empty response or error).[/yellow]")
+                    progress.update(task, completed=len(all_messages))
                     break
                 
                 all_messages.extend(messages)
@@ -276,8 +291,6 @@ async def create_discord_client() -> DiscordHTTPClient:
     
     if not token:
         console.print("\n[bold red]Discord Token Required[/bold red]")
-        console.print("I can see from your earlier message that you have a working token.")
-        console.print("Your token: MTM1ETkwMDY0MjU4MJU5NzY5NQ.GDZbgI.EekeiFnQgHZmfyu_ORvIOMHUpbTFucOrt0dTII")
         console.print("\n[cyan]You can:[/cyan]")
         console.print("1. Set it as environment variable: export DISCORD_TOKEN=your_token")
         console.print("2. Or enter it below")
@@ -292,68 +305,83 @@ async def create_discord_client() -> DiscordHTTPClient:
     client = DiscordHTTPClient(token)
     return client
 
-async def get_all_channels(client: DiscordHTTPClient) -> Dict:
-    """Get all accessible channels with rate limiting protection."""
+async def get_all_channels(
+    client: DiscordHTTPClient,
+    include_dm: bool = True,
+    include_guilds: bool = True
+) -> Dict:
+    """Get accessible channels with optional filters and rate limiting protection."""
     channels_data = {
         "dm_channels": [],
         "guilds": {}
     }
     
-    # Get DM channels
-    dm_channels = await client.get_dm_channels()
-    for channel in dm_channels:
-        if channel.get("type") == 1:  # DM
-            recipients = channel.get("recipients", [])
-            if recipients:
-                recipient_name = recipients[0].get("username", "Unknown")
+    # Get DM channels if requested
+    if include_dm:
+        dm_channels = await client.get_dm_channels()
+        for channel in dm_channels:
+            if channel.get("type") == 1:  # DM
+                recipients = channel.get("recipients", [])
+                if recipients:
+                    recipient_name = recipients[0].get("username", "Unknown")
+                    channels_data["dm_channels"].append({
+                        "id": channel["id"],
+                        "name": f"DM with {recipient_name}",
+                        "type": "DM"
+                    })
+            elif channel.get("type") == 3:  # Group DM
+                name = channel.get("name") or f"Group with {len(channel.get('recipients', []))} members"
                 channels_data["dm_channels"].append({
                     "id": channel["id"],
-                    "name": f"DM with {recipient_name}",
-                    "type": "DM"
+                    "name": name,
+                    "type": "Group DM"
                 })
-        elif channel.get("type") == 3:  # Group DM
-            name = channel.get("name") or f"Group with {len(channel.get('recipients', []))} members"
-            channels_data["dm_channels"].append({
-                "id": channel["id"],
-                "name": name,
-                "type": "Group DM"
-            })
     
-    # Get guild channels with progress and rate limiting
-    guilds = await client.get_guilds()
-    
-    if guilds:
-        console.print(f"[cyan]Loading channels from {len(guilds)} servers...[/cyan]")
+    # Get guild channels with progress and rate limiting if requested
+    if include_guilds:
+        guilds = await client.get_guilds()
         
-        with Progress() as progress:
-            task = progress.add_task("[cyan]Loading server channels...", total=len(guilds))
+        if guilds:
+            console.print(f"[cyan]Loading channels from {len(guilds)} servers...[/cyan]")
             
-            for guild in guilds:
-                try:
-                    guild_channels = await client.get_guild_channels(guild["id"])
-                    if guild_channels:
-                        channels_data["guilds"][guild["name"]] = {
-                            "id": guild["id"],
-                            "channels": [
-                                {
-                                    "id": ch["id"],
-                                    "name": ch["name"],
-                                    "category": "No Category"  # Simplified for now
-                                }
-                                for ch in guild_channels
-                            ]
-                        }
-                    progress.update(task, advance=1)
-                    
-                    # Small delay between guild requests to prevent rate limiting
-                    await asyncio.sleep(0.2)
-                    
-                except Exception as e:
-                    console.print(f"[yellow]Skipped guild {guild['name']}: {str(e)[:30]}...[/yellow]")
-                    progress.update(task, advance=1)
-                    continue
+            with Progress() as progress:
+                task = progress.add_task("[cyan]Loading server channels...", total=len(guilds))
+                
+                for guild in guilds:
+                    try:
+                        guild_channels = await client.get_guild_channels(guild["id"])
+                        if guild_channels:
+                            channels_data["guilds"][guild["id"]] = {
+                                "id": guild["id"],
+                                "name": guild["name"],
+                                "channels": [
+                                    {
+                                        "id": ch["id"],
+                                        "name": ch["name"],
+                                        "category": "No Category"  # Simplified for now
+                                    }
+                                    for ch in guild_channels
+                                ]
+                            }
+                        progress.update(task, advance=1)
+                        
+                        # Small delay between guild requests to prevent rate limiting
+                        await asyncio.sleep(0.2)
+                        
+                    except Exception as e:
+                        console.print(f"[yellow]Skipped guild {guild['name']}: {str(e)[:30]}...[/yellow]")
+                        progress.update(task, advance=1)
+                        continue
     
-    console.print(f"[green]Loaded {len(channels_data['dm_channels'])} DMs and {len(channels_data['guilds'])} servers[/green]")
+    loaded_parts = []
+    if include_dm:
+        loaded_parts.append(f"{len(channels_data['dm_channels'])} DMs")
+    if include_guilds:
+        loaded_parts.append(f"{len(channels_data['guilds'])} servers")
+    if loaded_parts:
+        console.print(f"[green]Loaded {' and '.join(loaded_parts)}[/green]")
+    else:
+        console.print("[yellow]No channel types selected to load.[/yellow]")
     return channels_data
 
 def display_dm_channels(dm_channels: List[Dict]) -> None:
@@ -383,9 +411,9 @@ def display_servers(guilds: Dict) -> None:
     server_table.add_column("Server Name", style="green")
     server_table.add_column("Channels", style="white")
     
-    for i, (guild_name, guild_data) in enumerate(guilds.items(), 1):
+    for i, guild_data in enumerate(guilds.values(), 1):
         channel_count = len(guild_data["channels"])
-        server_table.add_row(str(i), guild_name, f"{channel_count} channels")
+        server_table.add_row(str(i), guild_data["name"], f"{channel_count} channels")
     
     console.print(server_table)
 
@@ -452,7 +480,7 @@ def select_server(guilds: Dict) -> Optional[tuple]:
     """Let user select a server and return (guild_name, guild_data)."""
     display_servers(guilds)
     
-    guild_list = list(guilds.items())
+    guild_list = list(guilds.values())
     
     while True:
         choice = Prompt.ask(
@@ -463,9 +491,9 @@ def select_server(guilds: Dict) -> Optional[tuple]:
         if choice.isdigit():
             idx = int(choice) - 1
             if 0 <= idx < len(guild_list):
-                guild_name, guild_data = guild_list[idx]
-                console.print(f"[green]Selected server: {guild_name}[/green]")
-                return guild_name, guild_data
+                guild_data = guild_list[idx]
+                console.print(f"[green]Selected server: {guild_data['name']}[/green]")
+                return guild_data["name"], guild_data
             else:
                 console.print("[red]Invalid selection. Please try again.[/red]")
         else:
@@ -473,7 +501,8 @@ def select_server(guilds: Dict) -> Optional[tuple]:
             search_term = choice.lower()
             matches = []
             
-            for i, (guild_name, guild_data) in enumerate(guild_list):
+            for i, guild_data in enumerate(guild_list):
+                guild_name = guild_data["name"]
                 if search_term in guild_name.lower():
                     matches.append((i, guild_name, guild_data))
             
@@ -539,20 +568,27 @@ def select_server_channel(guild_name: str, channels: List[Dict]) -> Optional[str
             else:
                 console.print("[red]No channels found matching that name.[/red]")
 
-def select_channel_interactive(channels_data: Dict) -> Optional[tuple]:
+def select_channel_interactive(channels_data: Dict, preselected: Optional[str] = None) -> Optional[tuple]:
     """Interactive channel selection with better organization."""
     while True:
-        console.print("\n[bold]What would you like to access?[/bold]")
-        console.print("1. Direct Messages")
-        console.print("2. Server Channels") 
-        console.print("3. Back to main menu")
-        
-        choice = Prompt.ask("Select option", choices=["1", "2", "3"], default="1")
+        if preselected == "dm":
+            choice = "1"
+        elif preselected == "server":
+            choice = "2"
+        else:
+            console.print("\n[bold]What would you like to access?[/bold]")
+            console.print("1. Direct Messages")
+            console.print("2. Server Channels") 
+            console.print("3. Back to main menu")
+            
+            choice = Prompt.ask("Select option", choices=["1", "2", "3"], default="1")
         
         if choice == "1":
             # DM channels
             if not channels_data["dm_channels"]:
                 console.print("[yellow]No DM channels found.[/yellow]")
+                if preselected:
+                    return None, None
                 continue
             
             channel_id = select_dm_channel(channels_data["dm_channels"])
@@ -569,6 +605,8 @@ def select_channel_interactive(channels_data: Dict) -> Optional[tuple]:
             # Server channels
             if not channels_data["guilds"]:
                 console.print("[yellow]No servers found.[/yellow]")
+                if preselected:
+                    return None, None
                 continue
             
             # First select server
@@ -778,16 +816,39 @@ async def main():
             
             while True:
                 try:
-                    channels_data = await get_all_channels(client)
+                    console.print("\n[bold]What do you want to fetch?[/bold]")
+                    console.print("1. Direct Messages")
+                    console.print("2. Server Channels")
+                    console.print("3. Exit")
                     
-                    if not channels_data["dm_channels"] and not channels_data["guilds"]:
-                        console.print("[yellow]No accessible channels found.[/yellow]")
+                    selection = Prompt.ask("Select option", choices=["1", "2", "3"], default="1")
+                    
+                    if selection == "3":
                         break
                     
-                    result = select_channel_interactive(channels_data)
+                    fetch_dm = selection == "1"
+                    fetch_guilds = selection == "2"
+                    
+                    channels_data = await get_all_channels(
+                        client,
+                        include_dm=fetch_dm,
+                        include_guilds=fetch_guilds
+                    )
+                    
+                    if fetch_dm and not channels_data["dm_channels"]:
+                        console.print("[yellow]No accessible DM channels found.[/yellow]")
+                        continue
+                    if fetch_guilds and not channels_data["guilds"]:
+                        console.print("[yellow]No accessible servers found.[/yellow]")
+                        continue
+                    
+                    result = select_channel_interactive(
+                        channels_data,
+                        preselected="dm" if fetch_dm else "server"
+                    )
                     if not result or not result[0]:
-                        break  # User chose to go back to main menu
-                        
+                        continue  # Back to main choice
+                    
                     channel_id, channel_name = result
                     
                     count = Prompt.ask(

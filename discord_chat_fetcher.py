@@ -8,7 +8,7 @@ import asyncio
 import aiohttp
 from pathlib import Path
 from typing import Dict, List, Optional, Union
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from dotenv import load_dotenv
 from rich.console import Console
@@ -255,35 +255,45 @@ class DiscordHTTPClient:
         
         return []
     
-    async def fetch_all_messages(self, channel_id: str, total_limit: int) -> List[Dict]:
-        """Fetch multiple batches of messages."""
+    async def fetch_all_messages(self, channel_id: str, total_limit: int = None, cutoff_dt: datetime = None) -> List[Dict]:
+        """Fetch multiple batches of messages. Use total_limit for count mode, cutoff_dt for days mode."""
         all_messages = []
         before = None
-        
+        safety_limit = total_limit if total_limit is not None else 100_000
+
         with Progress() as progress:
-            task = progress.add_task(f"[cyan]Fetching messages...", total=total_limit)
-            
-            while len(all_messages) < total_limit:
-                remaining = total_limit - len(all_messages)
-                batch_size = min(100, remaining)
-                
-                messages = await self.get_messages(channel_id, batch_size, before)
-                
+            if total_limit is not None:
+                task = progress.add_task("[cyan]Fetching messages...", total=total_limit)
+            else:
+                task = progress.add_task("[cyan]Fetching messages...", total=None)
+
+            while len(all_messages) < safety_limit:
+                remaining = min(100, safety_limit - len(all_messages)) if total_limit is not None else 100
+                messages = await self.get_messages(channel_id, remaining, before)
+
                 if not messages:
                     console.print("[yellow]Stopped fetching messages early (empty response or error).[/yellow]")
-                    progress.update(task, completed=len(all_messages))
                     break
-                
-                all_messages.extend(messages)
-                progress.update(task, advance=len(messages))
-                
-                # Set before to the ID of the last message for pagination
+
+                if cutoff_dt is not None:
+                    filtered = []
+                    for msg in messages:
+                        ts = datetime.fromisoformat(msg["timestamp"].replace("Z", "+00:00"))
+                        if ts >= cutoff_dt:
+                            filtered.append(msg)
+                    all_messages.extend(filtered)
+                    progress.update(task, advance=len(filtered))
+                    # If any message was older than cutoff, we've gone far enough
+                    if len(filtered) < len(messages):
+                        break
+                else:
+                    all_messages.extend(messages)
+                    progress.update(task, advance=len(messages))
+
                 before = messages[-1]["id"]
-                
-                # Small delay to avoid rate limits
                 await asyncio.sleep(0.2)
-        
-        return all_messages[:total_limit]
+
+        return all_messages if total_limit is None else all_messages[:total_limit]
 
 async def create_discord_client() -> DiscordHTTPClient:
     """Create and test Discord HTTP client."""
@@ -798,6 +808,47 @@ def save_messages_to_file(messages: List[Dict], channel_name: str, file_format: 
             console.print(f"[bold red]Failed to save fallback file: {str(fallback_error)}[/bold red]")
             return "Error: Could not save file"
 
+def ask_fetch_mode() -> tuple:
+    """Ask user whether to fetch messages by days or by count."""
+    console.print("\n[bold]How do you want to select messages?[/bold]")
+    console.print("1. By days  (today, last 2 days, ...)")
+    console.print("2. By number of messages")
+
+    choice = Prompt.ask("Select option", choices=["1", "2"], default="1")
+
+    if choice == "1":
+        console.print("\n[bold]How many days back?[/bold]")
+        console.print("  1 = today only")
+        console.print("  2 = today + yesterday")
+        console.print("  3 = last 3 days")
+        console.print("  ...")
+
+        days_str = Prompt.ask("Number of days", default="1")
+        try:
+            days = int(days_str)
+            if days <= 0:
+                raise ValueError()
+        except ValueError:
+            console.print("[yellow]Invalid input, using 1 day.[/yellow]")
+            days = 1
+
+        cutoff = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=days - 1)
+        return "days", cutoff
+    else:
+        count_str = Prompt.ask(
+            "How many messages do you want to fetch?",
+            default=str(DEFAULT_MESSAGE_COUNT)
+        )
+        try:
+            count = int(count_str)
+            if count <= 0:
+                raise ValueError()
+        except ValueError:
+            console.print("[yellow]Invalid count. Using default value.[/yellow]")
+            count = DEFAULT_MESSAGE_COUNT
+        return "messages", count
+
+
 async def main():
     """Main function."""
     console.print(Panel.fit("[bold cyan]Discord HTTP Chat Fetcher[/bold cyan]", subtitle="Fetch Discord messages using direct HTTP"))
@@ -851,20 +902,12 @@ async def main():
                     
                     channel_id, channel_name = result
                     
-                    count = Prompt.ask(
-                        "How many messages do you want to fetch?",
-                        default=str(DEFAULT_MESSAGE_COUNT)
-                    )
-                    
-                    try:
-                        count = int(count)
-                        if count <= 0:
-                            raise ValueError("Count must be positive")
-                    except ValueError:
-                        console.print("[yellow]Invalid count. Using default value.[/yellow]")
-                        count = DEFAULT_MESSAGE_COUNT
-                    
-                    messages = await client.fetch_all_messages(channel_id, count)
+                    mode, value = ask_fetch_mode()
+
+                    if mode == "days":
+                        messages = await client.fetch_all_messages(channel_id, cutoff_dt=value)
+                    else:
+                        messages = await client.fetch_all_messages(channel_id, total_limit=value)
                     
                     if messages:
                         display_messages(messages, channel_name)

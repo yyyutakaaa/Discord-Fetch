@@ -13,6 +13,7 @@ import argparse
 import atexit
 import csv
 import getpass
+import io
 import json
 import os
 import re
@@ -30,7 +31,7 @@ from collections import Counter
 from datetime import date, datetime, time as dtime, timedelta, timezone
 from pathlib import Path
 
-VERSION = "3.1"  # bump this on every release: older copies update to the GitHub version on start
+VERSION = "3.2"  # bump this on every release: older copies update to the GitHub version on start
 UPDATE_URL = "https://raw.githubusercontent.com/yyyutakaaa/Discord-Fetch/main/fetch.py"
 API = "https://discord.com/api/v9"
 CFG_DIR = Path.home() / ".discord_fetch"
@@ -762,6 +763,10 @@ def compact(n):
     return str(n)
 
 
+def plural(n, word):
+    return "{:,} {}{}".format(n, word, "" if n == 1 else "s")
+
+
 def human_size(n):
     for unit in ("B", "KB", "MB", "GB"):
         if n < 1024 or unit == "GB":
@@ -1105,38 +1110,109 @@ def slug(name):
 
 
 def save_messages(messages, chan, fmt, out_dir):
-    msgs = chronological(messages)
     folder = Path(out_dir) / slug(chan["file"])
     folder.mkdir(parents=True, exist_ok=True)
     base = "{}_{}".format(slug(chan["file"]), datetime.now().strftime("%Y%m%d_%H%M%S"))
     path, n = folder / "{}.{}".format(base, fmt), 2
     while path.exists():
         path, n = folder / "{}_{}.{}".format(base, n, fmt), n + 1
-    exported = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M")
-
-    if fmt in ("txt", "md"):
-        with open(path, "w", encoding="utf-8") as f:
-            _write_text(f, msgs, chan, exported, markdown=(fmt == "md"))
-    elif fmt == "json":
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump({"channel": chan["title"], "channel_id": chan["id"],
-                       "exported_at": datetime.now().astimezone().isoformat(),
-                       "message_count": len(msgs), "messages": msgs},
-                      f, indent=2, ensure_ascii=False, default=str)
-    elif fmt == "csv":
-        with open(path, "w", newline="", encoding="utf-8-sig") as f:  # BOM so Excel reads UTF-8
-            w = csv.writer(f)
-            w.writerow(["timestamp_utc", "date", "time", "author", "username", "author_id",
-                        "message", "reply_to", "edited", "attachments"])
-            for m in msgs:
-                dt = parse_ts(m["timestamp"]).astimezone()
-                a = m.get("author") or {}
-                w.writerow([m["timestamp"], dt.strftime("%Y-%m-%d"), dt.strftime("%H:%M:%S"),
-                            display_name(a), a.get("username", ""), a.get("id", ""),
-                            message_text(m), (m.get("message_reference") or {}).get("message_id", ""),
-                            "yes" if m.get("edited_timestamp") else "",
-                            "; ".join(x.get("url", "") for x in m.get("attachments") or [])])
+    # CSV gets a BOM so Excel reads UTF-8; its rows already end in \r\n
+    with open(path, "w", encoding="utf-8-sig" if fmt == "csv" else "utf-8",
+              newline="" if fmt == "csv" else None) as f:
+        f.write(render_export(messages, chan, fmt))
     return path
+
+
+def render_export(messages, chan, fmt):
+    """The export as one string, in txt, md, json or csv."""
+    msgs = chronological(messages)
+    exported = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M")
+    f = io.StringIO()
+    if fmt in ("txt", "md"):
+        _write_text(f, msgs, chan, exported, markdown=(fmt == "md"))
+    elif fmt == "json":
+        json.dump({"channel": chan["title"], "channel_id": chan["id"],
+                   "exported_at": datetime.now().astimezone().isoformat(),
+                   "message_count": len(msgs), "messages": msgs},
+                  f, indent=2, ensure_ascii=False, default=str)
+    elif fmt == "csv":
+        w = csv.writer(f)
+        w.writerow(["timestamp_utc", "date", "time", "author", "username", "author_id",
+                    "message", "reply_to", "edited", "attachments"])
+        for m in msgs:
+            dt = parse_ts(m["timestamp"]).astimezone()
+            a = m.get("author") or {}
+            w.writerow([m["timestamp"], dt.strftime("%Y-%m-%d"), dt.strftime("%H:%M:%S"),
+                        display_name(a), a.get("username", ""), a.get("id", ""),
+                        message_text(m), (m.get("message_reference") or {}).get("message_id", ""),
+                        "yes" if m.get("edited_timestamp") else "",
+                        "; ".join(x.get("url", "") for x in m.get("attachments") or [])])
+    return f.getvalue()
+
+
+def copy_to_clipboard(text):
+    """Put text on the system clipboard. Raises OSError when that isn't possible."""
+    if sys.platform == "win32":
+        _windows_clipboard(text)
+        return
+    if sys.platform == "darwin":
+        tools = [["pbcopy"]]
+    else:
+        tools = [["wl-copy"], ["xclip", "-selection", "clipboard"], ["xsel", "--clipboard", "--input"]]
+    for cmd in tools:
+        if shutil.which(cmd[0]):
+            env = dict(os.environ, LANG=os.environ.get("LANG") or "en_US.UTF-8")
+            subprocess.run(cmd, input=text.encode("utf-8"), check=True, env=env)
+            return
+    raise OSError("no clipboard tool found (install wl-clipboard or xclip)")
+
+
+def _windows_clipboard(text):
+    import ctypes
+    from ctypes import wintypes
+    user32, kernel32 = ctypes.windll.user32, ctypes.windll.kernel32
+    kernel32.GlobalAlloc.argtypes = [wintypes.UINT, ctypes.c_size_t]
+    kernel32.GlobalAlloc.restype = wintypes.HGLOBAL
+    kernel32.GlobalLock.argtypes = [wintypes.HGLOBAL]
+    kernel32.GlobalLock.restype = ctypes.c_void_p
+    kernel32.GlobalUnlock.argtypes = [wintypes.HGLOBAL]
+    kernel32.GlobalFree.argtypes = [wintypes.HGLOBAL]
+    user32.OpenClipboard.argtypes = [wintypes.HWND]
+    user32.SetClipboardData.argtypes = [wintypes.UINT, wintypes.HANDLE]
+    user32.SetClipboardData.restype = wintypes.HANDLE
+
+    buf = ctypes.create_unicode_buffer(text.replace("\r\n", "\n").replace("\n", "\r\n"))
+    size = ctypes.sizeof(buf)
+    for _ in range(20):  # another app may hold the clipboard for a moment
+        if user32.OpenClipboard(None):
+            break
+        time.sleep(0.05)
+    else:
+        raise OSError("the clipboard is busy, try again")
+    try:
+        user32.EmptyClipboard()
+        handle = kernel32.GlobalAlloc(0x0002, size)  # GMEM_MOVEABLE
+        if not handle:
+            raise OSError("out of memory")
+        ctypes.memmove(kernel32.GlobalLock(handle), buf, size)
+        kernel32.GlobalUnlock(handle)
+        if not user32.SetClipboardData(13, handle):  # CF_UNICODETEXT
+            kernel32.GlobalFree(handle)
+            raise OSError("couldn't write to the clipboard")
+    finally:
+        user32.CloseClipboard()
+
+
+def copy_messages(messages, chan, fmt="txt"):
+    try:
+        with Spinner("Copying to clipboard"):
+            copy_to_clipboard(render_export(messages, chan, fmt))
+    except (OSError, subprocess.CalledProcessError) as e:
+        fail("Couldn't copy: {}".format(e))
+        return False
+    ok("Copied {} to your clipboard".format(plural(len(messages), "message"))
+       + paint("  as " + fmt, FAINT))
+    return True
 
 
 def _write_text(f, msgs, chan, exported, markdown):
@@ -1315,9 +1391,10 @@ def session_card(user, source):
 
 def after_fetch(messages, chan, out_dir):
     """Save / preview menu. Returns 'again' or 'quit'."""
-    saved, last_path = {}, None
+    saved, last_path, copied = {}, None, None
     while True:
-        items = [(k, lab, "✓ saved" if k in saved else h) for k, lab, h in FORMATS]
+        items = [("copy", "Copy to clipboard", "✓ copied as " + copied if copied else "paste it anywhere")]
+        items += [(k, lab, "✓ saved" if k in saved else h) for k, lab, h in FORMATS]
         items.append(("preview", "Preview in terminal", "latest {}".format(PREVIEW_LIMIT)))
         if last_path:
             items.append(("open", "Open export folder", tilde(last_path.parent)))
@@ -1327,7 +1404,12 @@ def after_fetch(messages, chan, out_dir):
         action = pick[0] if pick else "quit"
         if action in ("again", "quit"):
             return action
-        if action == "preview":
+        if action == "copy":
+            fmt = choose("Copy as", [(k, lab.replace("Save as", "Copy as"), h) for k, lab, h in FORMATS],
+                         label=lambda i: i[1], hint=lambda i: i[2], searchable=False)
+            if fmt and copy_messages(messages, chan, fmt[0]):
+                copied = fmt[0]
+        elif action == "preview":
             preview(messages, chan)
         elif action == "open":
             open_folder(last_path.parent)
@@ -1335,13 +1417,13 @@ def after_fetch(messages, chan, out_dir):
             try:
                 last_path = save_messages(messages, chan, action, out_dir)
                 saved[action] = last_path
-                ok("Saved {:,} messages".format(len(messages)))
+                ok("Saved " + plural(len(messages), "message"))
                 note(tilde(last_path))
             except OSError as e:
                 fail("Couldn't save: {}".format(e))
 
 
-def export_channel(token, chan, out_dir, rng=None, fmt=None):
+def export_channel(token, chan, out_dir, rng=None, fmt=None, copy=False):
     out()
     if rng is None:
         rng = choose_range()
@@ -1350,11 +1432,14 @@ def export_channel(token, chan, out_dir, rng=None, fmt=None):
     messages, seconds, _ = fetch_messages(token, chan["id"], *rng)
     if not messages:
         warn("No messages in that range.")
-        return "quit" if fmt else "again"
-    ok("Fetched {:,} messages".format(len(messages)))
-    if fmt:
-        path = save_messages(messages, chan, fmt, out_dir)
-        ok("Saved → " + tilde(path))
+        return "quit" if fmt or copy else "again"
+    ok("Fetched " + plural(len(messages), "message"))
+    if fmt or copy:
+        if fmt:
+            path = save_messages(messages, chan, fmt, out_dir)
+            ok("Saved → " + tilde(path))
+        if copy:
+            copy_messages(messages, chan, fmt or "txt")
         return "quit"
     summary(messages, chan, seconds)
     out()
@@ -1374,7 +1459,8 @@ def parse_args(argv):
         epilog="examples:\n"
                "  python fetch.py\n"
                "  python fetch.py --channel 123456789012345678 --days 7\n"
-               "  python fetch.py --channel https://discord.com/channels/1/2 --all --format md",
+               "  python fetch.py --channel https://discord.com/channels/1/2 --all --format md\n"
+               "  python fetch.py --channel 123456789012345678 --days 1 --copy",
         formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--channel", metavar="ID", help="channel ID or link (skips the menus)")
     rng = p.add_mutually_exclusive_group()
@@ -1382,6 +1468,8 @@ def parse_args(argv):
     rng.add_argument("--count", type=int, metavar="N", help="the last N messages")
     rng.add_argument("--all", action="store_true", help="the entire history")
     p.add_argument("--format", choices=[f[0] for f in FORMATS], help="save straight to this format")
+    p.add_argument("--copy", action="store_true",
+                   help="copy the result to your clipboard (as --format, default txt)")
     p.add_argument("--out", metavar="DIR", help="export folder (default: ~/Discord_Messages)")
     p.add_argument("--no-color", action="store_true", help="plain output")
     p.add_argument("--logout", action="store_true", help="forget the saved token and exit")
@@ -1428,7 +1516,7 @@ def main(argv=None):
         if not chan:
             return 1
         ok("Channel: " + paint(chan["title"], bold=True))
-        if export_channel(token, chan, out_dir, rng, args.format) == "quit":
+        if export_channel(token, chan, out_dir, rng, args.format, args.copy) == "quit":
             goodbye()
             return 0
 

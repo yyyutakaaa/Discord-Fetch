@@ -50,6 +50,8 @@ How far back you go is up to you. You can grab today, the last 7 or 30 days, the
 
 After that you get a small summary with how many messages there are, which period they cover and who talked the most. You can preview the chat right in the terminal or save it in as many formats as you want.
 
+Don't need a file? Pick Copy to clipboard and the whole chat goes straight to your clipboard, as text, markdown, json or csv. Then you just paste it wherever you want, like in a doc or in ChatGPT.
+
 Mentions, custom emoji and Discord timestamps are turned into normal text, so your export is actually readable. All times are shown in your own time zone.
 
 ## Using it without the menus
@@ -59,11 +61,12 @@ You can also do everything in one command. Handy if you export the same channel 
 ```bash
 python fetch.py --channel <id or link> --days 7
 python fetch.py --channel <id> --all --format md
+python fetch.py --channel <id> --days 1 --copy
 python fetch.py --count 500 --out D:\exports
 python fetch.py --logout
 ```
 
-`--channel` takes a channel id or a normal discord.com/channels link. With `--days`, `--count` or `--all` you choose how much you want. If you add `--format` it saves straight away and closes. `--out` changes the folder, `--no-color` gives plain text and `--logout` removes your saved token.
+`--channel` takes a channel id or a normal discord.com/channels link. With `--days`, `--count` or `--all` you choose how much you want. If you add `--format` it saves straight away and closes. `--copy` puts it on your clipboard instead, as plain text unless you also give a format. `--out` changes the folder, `--no-color` gives plain text and `--logout` removes your saved token.
 
 ## Getting your token
 

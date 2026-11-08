@@ -1,222 +1,98 @@
-# Discord Chat Fetcher
+# Discord Fetch
 
-A Python tool to fetch and export Discord messages from DMs and server channels using your Discord user token.
+A small tool to export your Discord DMs and server channels from the terminal. You pick a chat, pick how far back you want to go, and it saves everything as txt, markdown, json or csv.
 
-## Features
+It's just one file. No pip install, no requirements, nothing to set up. If you have Python 3.7 or newer it works on Windows, macOS and Linux.
 
-- Export DMs and Server Messages - Access both private messages and server channels
-- Multiple Export Formats - Save as TXT, JSON, or CSV
-- User-Friendly Interface - Clean menus and progress tracking
-- Rate Limiting Protection - Built-in delays to prevent API limits
-- Secure Token Storage - Save your token securely using system keyring
-- Search Functionality - Find channels by name
-- Clean Filenames - No spaces or special characters in exported files
+```
+   d i s c o r d
+  ███████╗███████╗████████╗ ██████╗██╗  ██╗
+  ██╔════╝██╔════╝╚══██╔══╝██╔════╝██║  ██║
+  █████╗  █████╗     ██║   ██║     ███████║
+  ██╔══╝  ██╔══╝     ██║   ██║     ██╔══██║
+  ██║     ███████╗   ██║   ╚██████╗██║  ██║
+  ╚═╝     ╚══════╝   ╚═╝    ╚═════╝╚═╝  ╚═╝
 
-## Requirements
+  ? Pick a conversation  48
+    ⌕ type to filter
+  ❯ Alice                            @alice  ·  2h ago
+    Study group                group · 5 people  ·  1d ago
+    Bob                                  @bob  ·  3d ago
+```
 
-- Python 3.8 or higher
-- Discord account with access to the channels you want to export
+## How to use it
 
-## Installation
+Install [Python](https://www.python.org/downloads/) if you don't have it yet. On Windows, make sure you tick Add python.exe to PATH during the install.
 
-### 1. Clone or download this repository
+Then download [fetch.py](https://raw.githubusercontent.com/yyyutakaaa/Discord-Fetch/main/fetch.py) and double-click it. That's it. If you prefer the terminal you can also just run it:
 
 ```bash
-git clone https://github.com/yyyutakaaa/Discord-Fetch
-cd discord-chat-fetcher
+python fetch.py
 ```
 
-### 2. Create a virtual environment (recommended)
+The first time it asks for your Discord token. You paste it once and it can remember it for next time.
+
+If double-clicking opens the file in an editor instead of running it, right-click it, go to Open with and choose Python. Tick the box so it always does that.
+
+## It updates itself
+
+Every time you open it, it checks GitHub for a newer version. If there is one it downloads it, replaces itself and starts again, so you never have to download it twice. When you're offline it just runs the version you already have.
+
+Don't want that? Set `DISCORD_FETCH_NO_UPDATE=1` and it skips the check.
+
+## What it can do
+
+You move through every menu with the arrow keys, and in longer lists you can just start typing to filter. Esc takes you back a step.
+
+Your DMs are sorted by who you talked to last, like in Discord itself. For servers you first pick the server and then the channel, and the channels are grouped by category so you find them fast.
+
+How far back you go is up to you. You can grab today, the last 7 or 30 days, the last few hundred messages or the whole history. While it's fetching you see a progress bar and how far back it already is. If it takes too long you can press Ctrl+C, and you still keep everything it already got.
+
+After that you get a small summary with how many messages there are, which period they cover and who talked the most. You can preview the chat right in the terminal or save it in as many formats as you want.
+
+Mentions, custom emoji and Discord timestamps are turned into normal text, so your export is actually readable. All times are shown in your own time zone.
+
+## Using it without the menus
+
+You can also do everything in one command. Handy if you export the same channel a lot.
 
 ```bash
-python -m venv discord_fetcher_env
-source discord_fetcher_env/bin/activate  # On Windows: discord_fetcher_env\Scripts\activate
+python fetch.py --channel <id or link> --days 7
+python fetch.py --channel <id> --all --format md
+python fetch.py --count 500 --out D:\exports
+python fetch.py --logout
 ```
 
-### 3. Install dependencies
+`--channel` takes a channel id or a normal discord.com/channels link. With `--days`, `--count` or `--all` you choose how much you want. If you add `--format` it saves straight away and closes. `--out` changes the folder, `--no-color` gives plain text and `--logout` removes your saved token.
 
-```bash
-pip install -r requirements.txt
-```
+## Getting your token
 
-## Getting Your Discord Token
+You need your own user token for this, not a bot token.
 
-**Important:** This tool requires your Discord USER token, not a bot token.
+Open [discord.com/app](https://discord.com/app) in your browser and press F12. Go to the Network tab and click on any channel. Pick one of the requests to discord.com/api and look for the authorization header in the request headers. That value is your token.
 
-### Method
+The tool first looks for a `DISCORD_TOKEN` environment variable, then for a `.env` file with `DISCORD_TOKEN=...` in it, and after that for the token you saved before.
 
-1. Open Discord in your web browser
-2. Press F12 to open Developer Tools
-3. Go to the Network tab
-4. Clear the network log
-5. Send any message in any channel/DM
-6. Look for a request containing 'messages' in the URL
-7. Click on that request
-8. In Request Headers, find 'authorization:' - copy everything after it
+Be careful with it though. Your token gives full access to your account, so never share it with anyone. The saved token is stored as plain text in `~/.discord_fetch/token`. If you want it gone, use `--logout` or the option in the menu.
 
-**Warning:** Never share your token with anyone. This gives full access to your Discord account.
+## Where your files go
 
-## Usage
-
-### Basic Usage
-
-Run the script:
-
-```bash
-python discord_chat_fetcher.py
-```
-
-### Setting Token as Environment Variable
-
-For easier usage, set your token as an environment variable:
-
-```bash
-# Linux/Mac
-export DISCORD_TOKEN="your_token_here"
-
-# Windows
-set DISCORD_TOKEN=your_token_here
-```
-
-Or create a `.env` file in the project directory:
+Everything is saved in `~/Discord_Messages`, with a separate folder for every chat.
 
 ```
-DISCORD_TOKEN=your_token_here
+Discord_Messages/
+├── DM_alice/
+│   └── DM_alice_20261108_143025.txt
+└── Test_Server_general/
+    └── Test_Server_general_20261108_143025.md
 ```
 
-### Using the Interface
+Txt is the easiest to just read. Markdown looks nice in VS Code or Obsidian. Json has all the raw data from Discord, and csv opens fine in Excel or Google Sheets, emoji included.
 
-1. **Main Menu Options:**
-   - Fetch Discord messages
-   - Configure save directory
-   - Configure token storage
-   - Manage saved token
-   - Exit
+## New version
 
-2. **Channel Selection:**
-   - Choose between Direct Messages or Server Channels
-   - For servers: first select server, then select channel
-   - Use search functionality to find specific channels
+Change `VERSION` at the top of `fetch.py` and push it to main. Everyone who has the file gets the update the next time they open it. It only updates to a higher version, so it never overwrites a newer local copy with an older one.
 
-3. **Message Export:**
-   - Choose number of messages to fetch
-   - Select export format (TXT, JSON, CSV)
-   - Messages are saved to configured directory
+## Heads up
 
-## Export Formats
-
-### TXT Format
-Human-readable format with date separators and timestamps:
-```
-Discord Messages from #general
-
-═══════════════════════════════════════════════════════
-
-─────── Monday, January 15, 2024 ───────
-
-14:30:25 - username: Hello world!
-14:31:02 - username2: How are you?
-```
-
-### JSON Format
-Structured data format with full message metadata:
-```json
-{
-  "channel_info": {
-    "channel_name": "#general",
-    "export_time": "2024-01-15T14:30:25",
-    "message_count": 100
-  },
-  "messages": [...]
-}
-```
-
-### CSV Format
-Spreadsheet-compatible format with columns:
-- Timestamp, Date, Time, Author, Username, Author_ID, Message, Attachments
-
-## Configuration
-
-### Save Directory
-By default, messages are saved to `~/Discord_Chat_Fetcher_Messages/`
-
-To change the save directory:
-1. Run the script
-2. Select "Configure save directory"
-3. Enter your preferred path
-
-### Token Storage
-The tool supports multiple token storage methods:
-
-1. **System Keyring (Recommended)** - Secure storage using your OS keyring
-2. **File Storage** - Saves token to a local file (less secure)
-3. **Environment Variables** - Use DISCORD_TOKEN environment variable
-4. **No Storage** - Enter token each time
-
-## File Organization
-
-Exported files are organized as follows:
-```
-Discord_Chat_Fetcher_Messages/
-├── DM_with_username/
-│   ├── DM_with_username_20240115_143025.txt
-│   └── DM_with_username_20240115_150030.json
-├── general_from_ServerName/
-│   └── general_from_ServerName_20240115_143025.csv
-└── ...
-```
-
-## Rate Limiting
-
-The tool includes built-in rate limiting protection:
-- Automatic delays between API requests
-- Graceful handling of Discord's rate limits
-- Progress tracking for large servers
-
-## Troubleshooting
-
-### Common Issues
-
-**"Invalid Discord token" error:**
-- Make sure you copied the entire token
-- Verify the token is from Discord web (not mobile app)
-- Try getting a fresh token by logging out and back in
-
-**"Rate limited" warnings:**
-- This is normal for accounts in many servers
-- The tool will automatically handle this
-- Some servers may be skipped if rate limited
-
-**"No permission" errors:**
-- You can only export messages from channels you have access to
-- Private channels you're not in will be skipped
-
-**Empty message exports:**
-- Check if you have permission to read message history
-- Some channels may have restrictions on older messages
-
-### Getting Help
-
-If you encounter issues:
-1. Check that your token is valid and recent
-2. Ensure you have Python 3.8+
-3. Verify all dependencies are installed
-4. Try with a smaller number of messages first
-
-## Legal and Ethical Considerations
-
-- Only export messages from channels you have legitimate access to
-- Respect Discord's Terms of Service
-- Be mindful of privacy when handling exported data
-- This tool is for personal use and data backup purposes
-
-## Security Notes
-
-- Your Discord token provides full access to your account
-- Never share your token with others
-- Use environment variables or keyring storage when possible
-- Regularly rotate your token for security
-
-## License
-
-This project is provided as-is for educational and personal use purposes.
+Running scripts on a user token goes against Discord's terms, and in theory your account can get flagged for it. Only export chats you're actually part of and be careful with other people's messages. This project is for personal backups and for learning, use it at your own risk.
